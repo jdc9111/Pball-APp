@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pickleball Hit Counter</title>
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 600px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            text-align: center;
+        }
+        .container {
+            background-color: #f5f5f5;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        #hit-count {
+            font-size: 10rem;
+            font-weight: bold;
+            color: #2563eb;
+            margin: 1rem 0;
+            line-height: 1;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-active {
+            background-color: #22c55e;
+            box-shadow: 0 0 8px #22c55e;
+        }
+        .status-inactive {
+            background-color: #ef4444;
+        }
+        button {
+            background-color: #2563eb;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 4px;
+            font-size: 1rem;
+            cursor: pointer;
+            margin: 0.5rem;
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background-color: #1d4ed8;
+        }
+        button.selected {
+            background-color: #059669;
+        }
+        #volume-meter {
+            width: 200px;
+            height: 20px;
+            background-color: #e5e7eb;
+            margin: 1rem auto;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        #volume-level {
+            width: 0%;
+            height: 100%;
+            background-color: #2563eb;
+            transition: width 0.1s;
+        }
+        .achievement-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            margin: 1rem 0;
+        }
+        #achievement-count {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #b45309;
+        }
+        .status {
+            margin: 1rem 0;
+            padding: 0.5rem;
+            border-radius: 4px;
+        }
+        .error {
+            background-color: #fee2e2;
+            color: #991b1b;
+        }
+        .mode-controls {
+            margin: 1rem 0;
+        }
+        .threshold-control {
+            margin: 1.5rem 0;
+        }
+        #hit-progress {
+            font-size: 1.5rem;
+            color: #666;
+            margin: 0.5rem 0;
+        }
+        .celebration {
+            animation: celebrate 1s ease-out;
+        }
+        @keyframes celebrate {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+        }
+        #debug-info {
+            margin: 1rem 0;
+            padding: 1rem;
+            background-color: #f8fafc;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            color: #666;
+            text-align: left;
+            display: none;
+        }
+        .show-debug {
+            background: none !important;
+            border: none;
+            color: #2563eb !important;
+            text-decoration: underline;
+            cursor: pointer;
+            padding: 0.5rem !important;
+            font-size: 0.8rem !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Pickleball Hit Counter</h1>
+        
+        <div id="status" class="status">
+            <span class="status-indicator status-inactive"></span>
+            <span id="status-text">Click "Start Listening" to begin</span>
+        </div>
+        
+        <div id="hit-count">0</div>
+        <div id="hit-progress"></div>
+        
+        <div class="achievement-container">
+            <span>🏆</span>
+            <div id="achievement-count">0</div>
+        </div>
+        
+        <div class="mode-controls">
+            <button id="normalMode" class="selected">Every Hit</button>
+            <button id="volleyMode">Every 2nd Hit</button>
+            <button id="dinkMode">Every 3rd Hit</button>
+        </div>
+
+        <div id="volume-meter">
+            <div id="volume-level"></div>
+        </div>
+
+        <div class="threshold-control">
+            <label for="threshold">Hit Sensitivity: </label>
+            <input type="range" id="threshold" min="0" max="100" value="50">
+        </div>
+        
+        <div class="controls">
+            <button id="startButton">Start Listening</button>
+            <button id="resetButton">Reset Hits</button>
+        </div>
+
+        <button class="show-debug" onclick="toggleDebug()">Show Technical Info</button>
+        <div id="debug-info"></div>
+    </div>
+
+    <script>
+        let audioContext = null;
+        let analyser = null;
+        let mediaStream = null;
+        let animationId = null;
+        let hitCount = 0;
+        let temporaryHitCount = 0;
+        let achievementCount = 0;
+        let lastHitTime = 0;
+        let hasReached100 = false;
+        let countMode = 1;
+
+        const startButton = document.getElementById('startButton');
+        const resetButton = document.getElementById('resetButton');
+        const hitCountDisplay = document.getElementById('hit-count');
+        const hitProgressDisplay = document.getElementById('hit-progress');
+        const achievementCountDisplay = document.getElementById('achievement-count');
+        const volumeLevel = document.getElementById('volume-level');
+        const status = document.getElementById('status');
+        const statusIndicator = status.querySelector('.status-indicator');
+        const statusText = document.getElementById('status-text');
+        const thresholdSlider = document.getElementById('threshold');
+        const debugInfo = document.getElementById('debug-info');
+        const normalMode = document.getElementById('normalMode');
+        const volleyMode = document.getElementById('volleyMode');
+        const dinkMode = document.getElementById('dinkMode');
+
+        // Mode selection
+        normalMode.addEventListener('click', () => setMode(1));
+        volleyMode.addEventListener('click', () => setMode(2));
+        dinkMode.addEventListener('click', () => setMode(3));
+
+        function setMode(mode) {
+            countMode = mode;
+            normalMode.classList.toggle('selected', mode === 1);
+            volleyMode.classList.toggle('selected', mode === 2);
+            dinkMode.classList.toggle('selected', mode === 3);
+            temporaryHitCount = 0;
+            updateProgress();
+        }
+
+        function updateProgress() {
+            if (countMode === 1) {
+                hitProgressDisplay.textContent = '';
+            } else {
+                hitProgressDisplay.textContent = `Hit ${temporaryHitCount} of ${countMode}`;
+            }
+        }
+
+        function showStatus(message, isError = false, isActive = false) {
+            statusText.textContent = message;
+            status.className = 'status' + (isError ? ' error' : '');
+            statusIndicator.classList.toggle('status-active', isActive);
+            statusIndicator.classList.toggle('status-inactive', !isActive);
+        }
+
+        function toggleDebug() {
+            debugInfo.style.display = debugInfo.style.display === 'none' ? 'block' : 'none';
+            updateDebugInfo();
+        }
+
+        function updateDebugInfo() {
+            const info = {
+                'Browser': navigator.userAgent,
+                'AudioContext State': audioContext ? audioContext.state : 'Not created',
+                'MediaStream': mediaStream ? 'Active' : 'Not created',
+                'Analyser': analyser ? 'Created' : 'Not created',
+                'Sample Rate': audioContext ? audioContext.sampleRate : 'N/A',
+                'Count Mode': countMode,
+                'Current Threshold': thresholdSlider.value,
+                'Hits': hitCount,
+                'Trophies': achievementCount
+            };
+            
+            debugInfo.innerHTML = '<h3>Technical Information:</h3>' + 
+                Object.entries(info)
+                    .map(([key, value]) => `<div><strong>${key}:</strong> ${value}</div>`)
+                    .join('');
+        }
+
+        function createCelebrationSound() {
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(587.33, audioCtx.currentTime);
+            gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+            
+            gainNode.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.1);
+            gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
+            
+            oscillator.start(audioCtx.currentTime);
+            oscillator.stop(audioCtx.currentTime + 0.5);
+            
+            const oscillator2 = audioCtx.createOscillator();
+            oscillator2.connect(gainNode);
+            oscillator2.type = 'sine';
+            oscillator2.frequency.setValueAtTime(880, audioCtx.currentTime + 0.25);
+            
+            oscillator2.start(audioCtx.currentTime + 0.25);
+            oscillator2.stop(audioCtx.currentTime + 0.75);
+        }
+
+        function celebrate() {
+            hitCountDisplay.classList.add('celebration');
+            createCelebrationSound();
+            setTimeout(() => {
+                hitCountDisplay.classList.remove('celebration');
+            }, 1000);
+        }
+
+        async function startAudio() {
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false
+                    }
+                });
+                
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioContext.createMediaStreamSource(mediaStream);
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 256;
+                source.connect(analyser);
+                
+                return true;
+            } catch (err) {
+                console.error('Audio start error:', err);
+                showStatus('Microphone error: ' + err.message, true);
+                return false;
+            }
+        }
+
+        function stopAudio() {
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+            
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            
+            volumeLevel.style.width = '0%';
+        }
+
+        async function toggleListening() {
+            if (!audioContext) {
+                showStatus('Requesting microphone access...');
+                const success = await startAudio();
+                
+                if (success) {
+                    startButton.textContent = 'Stop';
+                    showStatus('Listening for hits...', false, true);
+                    startDetecting();
+                }
+            } else {
+                stopAudio();
+                startButton.textContent = 'Start Listening';
+                showStatus('Stopped listening');
+            }
+            updateDebugInfo();
+        }
+
+        function startDetecting() {
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            
+            function detect() {
+                animationId = requestAnimationFrame(detect);
+                
+                analyser.getByteFrequencyData(dataArray);
+                const volume = dataArray.reduce((acc, val) => acc + val, 0) / dataArray.length;
+                const normalizedVolume = (volume / 256) * 100;
+                
+                volumeLevel.style.width = `${normalizedVolume}%`;
+                
+                const now = Date.now();
+                if (normalizedVolume > thresholdSlider.value && (now - lastHitTime) > 200) {
+                    temporaryHitCount++;
+                    updateProgress();
+                    
+                    if (temporaryHitCount >= countMode) {
+                        hitCount++;
+                        hitCountDisplay.textContent = hitCount;
+                        temporaryHitCount = 0;
+                        
+                        if (hitCount >= 100 && !hasReached100) {
+                            hasReached100 = true;
+                            achievementCount++;
+                            achievementCountDisplay.textContent = achievementCount;
+                            celebrate();
+                        } else if (hitCount < 100) {
+                            hasReached100 = false;
+                        }
+                        
+                        hitCountDisplay.style.color = '#059669';
+                        setTimeout(() => {
+                            hitCountDisplay.style.color = '#2563eb';
+                        }, 200);
+                    }
+                    lastHitTime = now;
+                }
+            }
+            
+            detect();
+        }
+
+        function resetCount() {
+            hitCount = 0;
+            temporaryHitCount = 0;
+            hasReached100 = false;
+            hitCountDisplay.textContent = '0';
+            updateProgress();
+        }
+
+        // Event listeners
+        startButton.addEventListener('click', toggleListening);
+        resetButton.addEventListener('click', resetCount);
+
+        // Initialize
+        updateProgress();
+    </script>
+</body>
+</html>
